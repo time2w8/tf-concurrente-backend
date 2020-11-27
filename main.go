@@ -27,7 +27,6 @@ type NeuralNetwork struct {
 	modelError          float64
 	learningRate        float64
 	epochs              int
-	lengthTrainingSet   int
 	inputNeuronsAmount  int
 	hiddenNeuronsAmount int
 	outputNeuronsAmount int
@@ -65,6 +64,15 @@ func (n *NeuralNetwork) initializeNetwork() {
 
 	// creación de vector para almacenar los errores de cada época
 	n.epochErrors = make([]float64, n.epochs)
+}
+
+// inicialización de la red neuronal
+var network = NeuralNetwork{
+	inputNeuronsAmount:  4,
+	hiddenNeuronsAmount: 2,
+	outputNeuronsAmount: 1,
+	epochs:              1000,
+	learningRate:        0.3,
 }
 
 // FUNCIONES CON MATRICES
@@ -234,7 +242,32 @@ func sigmoid(x float64) float64 {
 
 // derivada de la función sigmoide
 func sigmoidDerivative(y float64) float64 {
-	return y * (1 * y)
+	return y * (1 - y)
+}
+
+// propagar hacia delante para predecir
+func (n *NeuralNetwork) predict(predictData [][]float64) float64 {
+	// propagación de la capa de entrada a la capa oculta
+	hiddenPropagation := make([][]float64, len(predictData))
+	for i := 0; i < len(predictData); i++ {
+		hiddenPropagation[i] = make([]float64, n.hiddenNeuronsAmount)
+		for j := 0; j < n.hiddenNeuronsAmount; j++ {
+			hiddenPropagation[i][j] = sigmoid(vecDotProduct(predictData[i][:n.inputNeuronsAmount], n.hiddenWeights[j]) + n.hiddenBias[j])
+		}
+	}
+
+	// propagación de la capa oculta a la capa de salida
+	outputPropagation := make([][]float64, len(predictData))
+	for i := 0; i < len(predictData); i++ {
+		outputPropagation[i] = make([]float64, n.outputNeuronsAmount)
+		for j := 0; j < n.outputNeuronsAmount; j++ {
+			outputPropagation[i][j] = sigmoid(vecDotProduct(hiddenPropagation[i], n.outputWeights[j]) + n.outputBias[j])
+		}
+	}
+
+	fmt.Println(outputPropagation)
+	// devolución los valores finales de la capa intermedia y oculta, ya que se usaran en la propagación hacia atrás
+	return math.Round(outputPropagation[0][0])
 }
 
 // propaga hacia adelante los valores de entrada del dataset
@@ -253,7 +286,7 @@ func (n *NeuralNetwork) frontPropagation(chFrontPropagation chan string, trainin
 	for i := 0; i < len(trainingSet); i++ {
 		outputPropagation[i] = make([]float64, n.outputNeuronsAmount)
 		for j := 0; j < n.outputNeuronsAmount; j++ {
-			outputPropagation[i][j] = sigmoid(vecDotProduct(hiddenPropagation[i], n.hiddenWeights[j]) + n.outputBias[j])
+			outputPropagation[i][j] = sigmoid(vecDotProduct(hiddenPropagation[i], n.outputWeights[j]) + n.outputBias[j])
 		}
 	}
 
@@ -332,12 +365,117 @@ func readCSVFromUrl(url string) ([][]string, error) {
 
 	return data, nil
 }
+func trainModel(trainUrl string) {
+	// inicialización eel tiempo (para medir cuánto se demora en ejecutarse)
+	start := time.Now()
+
+	// obtenemos el datset de entrenamiento desde el repositorio online
+	url := trainUrl
+	data, _ := readCSVFromUrl(url)
+	trainingSet := matConvertToFloat64(data)
+
+	// inicialización de la red neuronal
+	network.initializeNetwork()
+
+	// división del dataset en 4 secciones de entrenamiento
+	lengthTrainingSet := len(trainingSet)
+	firstTrainingSection := trainingSet[:lengthTrainingSet/4]
+	secondTrainingSection := trainingSet[lengthTrainingSet/4 : 2*lengthTrainingSet/4]
+	thirdTrainingSection := trainingSet[2*lengthTrainingSet/4 : 3*lengthTrainingSet/4]
+	fourthTrainingSection := trainingSet[3*lengthTrainingSet/4:]
+
+	// inicialización y cierre anticipado del canal por el cual se compartirá información de la propagaciónh hacia adelante
+	chFrontPropagation := make(chan string)
+	defer close(chFrontPropagation)
+
+	// ciclo for por cada época
+	for i := 0; i < network.epochs; i++ {
+		fmt.Printf("Epoch %d \n", i)
+
+		// ejecución paralela de la propagación hacia adelante de cada sección de entrenamiento
+		finishedSets := 0
+		var output1, hidden1, output2, hidden2, output3, hidden3, output4, hidden4 [][]float64
+		go func() { hidden1, output1 = network.frontPropagation(chFrontPropagation, firstTrainingSection, 1) }()
+		go func() { hidden2, output2 = network.frontPropagation(chFrontPropagation, secondTrainingSection, 2) }()
+		go func() { hidden3, output3 = network.frontPropagation(chFrontPropagation, thirdTrainingSection, 3) }()
+		go func() { hidden4, output4 = network.frontPropagation(chFrontPropagation, fourthTrainingSection, 4) }()
+		for {
+			msg := <-chFrontPropagation
+			fmt.Printf("Msg: %s \n", msg)
+			if msg[:10] == "Propagated" {
+				finishedSets += 1
+			}
+			// si todas las secciones se han propagado hacia adelante, se rompe el ciclo
+			if finishedSets == 4 {
+				time.Sleep(360000 * time.Nanosecond)
+				break
+			}
+		}
+		// combinación de los resultados de cada sección de aprendizaje
+		propagatedGeneralOutput := make([][]float64, lengthTrainingSet)
+		propagatedGeneralHidden := make([][]float64, lengthTrainingSet)
+		// -- combinación de la primera sección
+		indexHelper := 0
+		for j := 0; j < len(output1); j++ {
+			propagatedGeneralOutput[j+indexHelper] = output1[j]
+			propagatedGeneralHidden[j+indexHelper] = hidden1[j]
+		}
+		// -- combinación de la segunda sección
+		indexHelper = indexHelper + len(output1)
+		for j := 0; j < len(output2); j++ {
+			propagatedGeneralOutput[j+indexHelper] = output2[j]
+			propagatedGeneralHidden[j+indexHelper] = hidden2[j]
+		}
+		// -- combinación de la tercera sección
+		indexHelper = indexHelper + len(output2)
+		for j := 0; j < len(output3); j++ {
+			propagatedGeneralOutput[j+indexHelper] = output3[j]
+			propagatedGeneralHidden[j+indexHelper] = hidden3[j]
+		}
+		// -- combinación de la cuarta sección
+		indexHelper = indexHelper + len(output3)
+		for j := 0; j < len(output4); j++ {
+			propagatedGeneralOutput[j+indexHelper] = output4[j]
+			propagatedGeneralHidden[j+indexHelper] = hidden4[j]
+		}
+
+		// propagación hacia atrás y aprendizaje de la red neuronal
+		network.backPropagation(propagatedGeneralHidden, propagatedGeneralOutput, trainingSet, i)
+		fmt.Printf("Learned in epoch %d\n\n", i)
+	}
+
+	// cálculo del error general del modelo
+	for i := 0; i < len(network.epochErrors); i++ {
+		network.modelError += network.epochErrors[i] / float64(network.epochs)
+	}
+
+	// cálculo del tiempo transcurrido
+	elapsed := time.Since(start)
+
+	// visualización de métricas
+	fmt.Printf("\n---------------------------\n")
+	fmt.Printf("METRICS")
+	fmt.Printf("\n---------------------------\n")
+	fmt.Printf("Model error: %f\n", network.modelError)
+	fmt.Printf("Execution took %s", elapsed)
+}
 
 type user struct {
 	ID       int    `json:ID`
 	Name     string `json:Name`
 	LastName string `json:LastName`
 	Password string `json:Password`
+}
+
+type training struct {
+	Dataset string `json:Dataset`
+}
+
+type prediction struct {
+	Education float64 `json:Education` // Nivel de educacion (GRADUADO: 1 / NO-GRADUADO: 0)
+	Salary    float64 `json:Education`
+	Loan      float64 `json:Loan`
+	History   float64 `json:Loan` // Historial crediticio (Si: 1 / No: 0)
 }
 
 type userList []user
@@ -437,28 +575,29 @@ func updateUser(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func main() {
+// --POST-- {API_URL}/rnn/train
+func trainNeuronalNetwork(w http.ResponseWriter, r *http.Request) {
+	var newTraining training
+
+	reqBody, err := ioutil.ReadAll(r.Body)
+	if err != nil {
+		fmt.Fprintf(w, "Inserte un cuerpo valido.")
+	}
+
+	json.Unmarshal(reqBody, &newTraining)
+
 	// inicialización eel tiempo (para medir cuánto se demora en ejecutarse)
 	start := time.Now()
 
 	// obtenemos el datset de entrenamiento desde el repositorio online
-	url := "https://raw.githubusercontent.com/AdrianCAmes/Go_Parallel_Backpropagation/main/iris_dataset.csv"
+	url := newTraining.Dataset
 	data, _ := readCSVFromUrl(url)
 	trainingSet := matConvertToFloat64(data)
 
-	// inicialización de la red neuronal
-	network := NeuralNetwork{
-		lengthTrainingSet:   len(trainingSet),
-		inputNeuronsAmount:  4,
-		hiddenNeuronsAmount: 2,
-		outputNeuronsAmount: 1,
-		epochs:              1000,
-		learningRate:        0.3,
-	}
 	network.initializeNetwork()
 
 	// división del dataset en 4 secciones de entrenamiento
-	lengthTrainingSet := network.lengthTrainingSet
+	lengthTrainingSet := len(trainingSet)
 	firstTrainingSection := trainingSet[:lengthTrainingSet/4]
 	secondTrainingSection := trainingSet[lengthTrainingSet/4 : 2*lengthTrainingSet/4]
 	thirdTrainingSection := trainingSet[2*lengthTrainingSet/4 : 3*lengthTrainingSet/4]
@@ -538,6 +677,34 @@ func main() {
 	fmt.Printf("\n---------------------------\n")
 	fmt.Printf("Model error: %f\n", network.modelError)
 	fmt.Printf("Execution took %s", elapsed)
+
+	fmt.Fprintf(w, "Model error: %f\n", network.modelError)
+}
+
+// --POST-- {API_URL}/rnn/prediction
+func makePrediction(w http.ResponseWriter, r *http.Request) {
+	var newPrediction prediction
+
+	reqBody, err := ioutil.ReadAll(r.Body)
+	if err != nil {
+		fmt.Fprintf(w, "Inserte un cuerpo valido.")
+	}
+
+	json.Unmarshal(reqBody, &newPrediction)
+
+	predictMatrix := make([][]float64, 1)
+	predictMatrix[0] = make([]float64, network.inputNeuronsAmount)
+	predictMatrix[0][0] = newPrediction.Education
+	predictMatrix[0][1] = newPrediction.Salary
+	predictMatrix[0][2] = newPrediction.Loan
+	predictMatrix[0][3] = newPrediction.History
+
+	predictedValue := network.predict(predictMatrix)
+
+	fmt.Fprintf(w, "Prediction result: %f\n", predictedValue)
+}
+
+func main() {
 	router := mux.NewRouter().StrictSlash(true)
 
 	//USER ROUTES
@@ -546,6 +713,11 @@ func main() {
 	router.HandleFunc("/users/{id}", getUser).Methods("GET")
 	router.HandleFunc("/users/{id}", deleteUser).Methods("DELETE")
 	router.HandleFunc("/users/{id}", updateUser).Methods("PUT")
+	//-----------
+
+	//RED NEURONAL ROUTES
+	router.HandleFunc("/rnn/train", trainNeuronalNetwork).Methods("POST")
+	router.HandleFunc("/rnn/prediction", makePrediction).Methods("POST")
 	//-----------
 
 	log.Fatal(http.ListenAndServe(":3000", router))
