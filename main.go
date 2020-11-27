@@ -720,5 +720,5 @@ func main() {
 	router.HandleFunc("/rnn/prediction", makePrediction).Methods("POST")
 	//-----------
 
-	log.Fatal(http.ListenAndServe(":3001", router))
+	log.Fatal(http.ListenAndServe(":3000", router))
 }
