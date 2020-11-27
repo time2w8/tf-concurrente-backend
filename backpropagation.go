@@ -3,10 +3,13 @@ package main
 // importar paquetes necesarios
 import (
 	"encoding/csv"
+	"encoding/json"
 	"fmt"
 	"math"
 	"math/rand"
+	"net"
 	"net/http"
+	"os"
 	"strconv"
 	"time"
 )
@@ -328,8 +331,7 @@ func readCSVFromUrl(url string) ([][]string, error) {
 
 	return data, nil
 }
-
-func main() {
+func start() {
 	// inicialización eel tiempo (para medir cuánto se demora en ejecutarse)
 	start := time.Now()
 
@@ -344,7 +346,7 @@ func main() {
 		inputNeuronsAmount:  4,
 		hiddenNeuronsAmount: 2,
 		outputNeuronsAmount: 1,
-		epochs:              1000,
+		epochs:              5,
 		learningRate:        0.3,
 	}
 	network.initializeNetwork()
@@ -430,4 +432,83 @@ func main() {
 	fmt.Printf("\n---------------------------\n")
 	fmt.Printf("Model error: %f\n", network.modelError)
 	fmt.Printf("Execution took %s", elapsed)
+}
+
+type Msg struct {
+	Addr string `json:"addr"`
+	Data string `json:"data"`
+}
+
+func server(local string, remotes []string, ch chan Msg) {
+	if ln, err := net.Listen("tcp", local); err == nil {
+		defer ln.Close()
+		fmt.Printf("Listening on %s\n", local)
+		for {
+			if conn, err := ln.Accept(); err == nil {
+				fmt.Printf("Connection accepted from %s\n", conn.RemoteAddr())
+				go handle(conn, local, remotes, ch)
+			}
+		}
+	}
+}
+
+func handle(conn net.Conn, local string, remotes []string, ch chan Msg) {
+	defer conn.Close()
+	dec := json.NewDecoder(conn)
+	var msg Msg
+	if err := dec.Decode(&msg); err == nil {
+		fmt.Printf("Message: %v\n", msg)
+		ch <- msg
+	}
+}
+
+func sendAll(option, local string, remotes []string) {
+	for _, remote := range remotes {
+		send(local, remote, option)
+	}
+}
+
+func send(local, remote, option string) {
+	if conn, err := net.Dial("tcp", remote); err == nil {
+		enc := json.NewEncoder(conn)
+		if err := enc.Encode(Msg{local, option}); err == nil {
+			fmt.Printf("Sending %s to %s\n", option, remote)
+		}
+	}
+}
+func executeserver() {
+	var data string
+	var riesgo, sin_riesgo int
+	local := os.Args[1]
+	remotes := os.Args[2:]
+	ch := make(chan Msg)
+	go server(local, remotes, ch)
+
+	fmt.Print("Your option:")
+	fmt.Scanf("%s", &data)
+	sendAll(data, local, remotes)
+	if data == "Riesgo" {
+		riesgo = 1
+	} else {
+		sin_riesgo = 1
+	}
+	for range remotes {
+		msg := <-ch
+		if msg.Data == "Riesgo" {
+			riesgo++
+		} else {
+			sin_riesgo++
+		}
+	}
+	if riesgo > sin_riesgo {
+		fmt.Println("Tiene riesgo")
+	} else {
+		fmt.Println("No tiene riesgo")
+	}
+
+}
+func main() {
+	executeserver()
+	start()
+
 }
