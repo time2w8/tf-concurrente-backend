@@ -43,7 +43,7 @@ var network = NeuralNetwork{
 	epochs:              5,
 	learningRate:        0.3,
 }
-var chMsg = make(chan Msg)
+var chMsg chan Msg
 
 // función para inicializar la red neuronal
 func (n *NeuralNetwork) initializeNetwork() {
@@ -596,14 +596,16 @@ func predictHandler(chMsg chan Msg, predictData PredictData, local string, remot
 	} else {
 		sin_riesgo = 1
 	}
-	for range remotes {
+	/*for range remotes {
+		fmt.Println("here")
 		msg := <-chMsg
+		fmt.Println("there")
 		if msg.Data == "Riesgo" {
 			riesgo++
 		} else {
 			sin_riesgo++
 		}
-	}
+	}*/
 	if riesgo > sin_riesgo {
 		fmt.Println("Tiene riesgo")
 		return "Riesgo"
@@ -650,6 +652,7 @@ func main() {
 	router := mux.NewRouter().StrictSlash(true)
 	local := os.Args[1]
 	remotes := os.Args[2:]
+	chMsg = make(chan Msg)
 	executeServer(chMsg, local, remotes)
 
 	//RED NEURONAL ROUTES
