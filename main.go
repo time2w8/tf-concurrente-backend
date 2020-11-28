@@ -79,6 +79,15 @@ func (n *NeuralNetwork) initializeNetwork() {
 	n.epochErrors = make([]float64, n.epochs)
 }
 
+// inicialización de la red neuronal
+var network = NeuralNetwork{
+	inputNeuronsAmount:  4,
+	hiddenNeuronsAmount: 2,
+	outputNeuronsAmount: 1,
+	epochs:              1000,
+	learningRate:        0.3,
+}
+
 // FUNCIONES CON MATRICES
 
 // obtiene solo los inputs del dataset de entrenamiento
@@ -456,6 +465,7 @@ func trainModel(trainUrl string) {
 	fmt.Printf("\n---------------------------\n")
 	fmt.Printf("METRICS")
 	fmt.Printf("\n---------------------------\n")
+
 	fmt.Printf("Model error: %f\n", network.modelError*10)
 	fmt.Printf("Execution took %s\n", elapsed)
 }
@@ -672,4 +682,5 @@ func main() {
 	}
 	fmt.Println("API on port", port)
 	log.Fatal(http.ListenAndServe(port, router))
+
 }
