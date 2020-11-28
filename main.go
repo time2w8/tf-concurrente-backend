@@ -1,18 +1,21 @@
 package main
 
+// importar paquetes necesarios
 import (
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
-	"log"
 	"math"
 	"math/rand"
+	"net"
 	"net/http"
+	"os"
 	"strconv"
 	"time"
-
+	//"reflect"
 	"github.com/gorilla/mux"
+	"io/ioutil"
+	"log"
 )
 
 // SOBRE LA RED NEURONAL
@@ -31,6 +34,16 @@ type NeuralNetwork struct {
 	hiddenNeuronsAmount int
 	outputNeuronsAmount int
 }
+
+// configuración inicial del network
+var network = NeuralNetwork{
+	inputNeuronsAmount:  4,
+	hiddenNeuronsAmount: 2,
+	outputNeuronsAmount: 1,
+	epochs:              5,
+	learningRate:        0.3,
+}
+var chMsg = make(chan Msg)
 
 // función para inicializar la red neuronal
 func (n *NeuralNetwork) initializeNetwork() {
@@ -265,7 +278,6 @@ func (n *NeuralNetwork) predict(predictData [][]float64) float64 {
 		}
 	}
 
-	fmt.Println(outputPropagation)
 	// devolución los valores finales de la capa intermedia y oculta, ya que se usaran en la propagación hacia atrás
 	return math.Round(outputPropagation[0][0])
 }
@@ -374,9 +386,6 @@ func trainModel(trainUrl string) {
 	data, _ := readCSVFromUrl(url)
 	trainingSet := matConvertToFloat64(data)
 
-	// inicialización de la red neuronal
-	network.initializeNetwork()
-
 	// división del dataset en 4 secciones de entrenamiento
 	lengthTrainingSet := len(trainingSet)
 	firstTrainingSection := trainingSet[:lengthTrainingSet/4]
@@ -456,269 +465,222 @@ func trainModel(trainUrl string) {
 	fmt.Printf("\n---------------------------\n")
 	fmt.Printf("METRICS")
 	fmt.Printf("\n---------------------------\n")
-	fmt.Printf("Model error: %f\n", network.modelError)
-	fmt.Printf("Execution took %s", elapsed)
+
+	fmt.Printf("Model error: %f\n", network.modelError*10)
+	fmt.Printf("Execution took %s\n", elapsed)
 }
 
-type user struct {
-	ID       int    `json:ID`
-	Name     string `json:Name`
-	LastName string `json:LastName`
-	Password string `json:Password`
+
+//----------------------------------------------------------------------------------
+
+type Msg struct {
+	Addr string `json:"addr"`
+	Data string `json:"data"`
 }
 
-type training struct {
-	Dataset string `json:Dataset`
+type PredictData struct {
+	Education float64 `json:"Education"`
+	Salary float64 `json:"Salary"`
+	Loan float64 `json:"Loan"`
+	History float64 `json:"History"`
 }
 
-type prediction struct {
-	Education float64 `json:Education` // Nivel de educacion (GRADUADO: 1 / NO-GRADUADO: 0)
-	Salary    float64 `json:Education`
-	Loan      float64 `json:Loan`
-	History   float64 `json:Loan` // Historial crediticio (Si: 1 / No: 0)
+type TrainData struct {
+	Url string `json:"url"`
 }
 
-type userList []user
-
-var users = userList{
-	{
-		ID:       1,
-		Name:     "Emanuel",
-		LastName: "Gonzales",
-		Password: "12345",
-	},
+type Reciever struct {
+	Addr string `json:"addr"`
+	Data string `json:"data"`
+	Education float64 `json:"Education"`
+	Salary float64 `json:"Salary"`
+	Loan float64 `json:"Loan"`
+	History float64 `json:"History"`
+	Url string `json:"url"`
 }
 
-// --GET-- {API_URL}/users
-func getUsers(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(users)
-}
-
-// --POST-- {API_URL}/users
-func createUser(w http.ResponseWriter, r *http.Request) {
-	var myUser user
-	reqBody, err := ioutil.ReadAll(r.Body)
-
-	if err != nil {
-		fmt.Fprintf(w, "Inserte un usuario valido.")
-	}
-
-	json.Unmarshal(reqBody, &myUser)
-
-	myUser.ID = len(users) + 1
-	users = append(users, myUser)
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(myUser)
-}
-
-// --GET-- {API_URL}/users/{id}
-func getUser(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	userID, err := strconv.Atoi(vars["id"])
-
-	if err != nil {
-		fmt.Fprintf(w, "Invalid ID.")
-	}
-
-	for _, user := range users {
-		if user.ID == userID {
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(user)
+func server(local string, remotes []string, chMsg chan Msg) {
+	if ln, err := net.Listen("tcp", local); err == nil {
+		defer ln.Close()
+		fmt.Printf("Listening on %s\n", local)
+		if conn, err := ln.Accept(); err == nil {
+			fmt.Printf("Connection accepted from %s\n", conn.RemoteAddr())
+			handle(conn, local, remotes, chMsg)
 		}
 	}
 }
 
-// --DELETE-- {API_URL}/users/{id}
-func deleteUser(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	userID, err := strconv.Atoi(vars["id"])
+func handle(conn net.Conn, local string, remotes []string, chMsg chan Msg) {
+	defer conn.Close()
+	dec := json.NewDecoder(conn)
+	var msg Msg
+	var pd PredictData
+	var rv Reciever
+	if err := dec.Decode(&rv); err == nil  {
+		fmt.Println(rv)
+		if !(rv.Addr == "" && rv.Data == "") {
+			msg.Addr = rv.Addr
+			msg.Data = rv.Data
+			fmt.Printf("Message: %v\n", msg)
+			chMsg <- msg
+		} else if !(rv.Education == 0 && rv.Salary == 0 && rv.Loan == 0 && rv.History == 0) {	
+			pd.Education = rv.Education
+			pd.Salary = rv.Salary
+			pd.Loan = rv.Loan
+			pd.History = rv.History
+			predictHandler(chMsg, pd, local, remotes)
+			fmt.Printf("Predicting data: %v\n", pd)
+		} else if !(rv.Url == "") {
+			trainModel(rv.Url)
+			fmt.Printf("Training data: %v\n", rv.Url)
+		}
+	} 
+}
 
-	if err != nil {
-		fmt.Fprintf(w, "Id no válido")
+func sendAll(option, local string, remotes []string) {
+	for _, remote := range remotes {
+		send(local, remote, option)
 	}
+}
 
-	for index, user := range users {
-		if user.ID == userID {
-			users = append(users[:index], users[index+1:]...)
-			fmt.Fprintf(w, "El usuario con id %v ha sido removido.", user.ID)
+func send(local, remote, option string) {
+	if conn, err := net.Dial("tcp", remote); err == nil {
+		enc := json.NewEncoder(conn)
+		if err := enc.Encode(Msg{local, option}); err == nil {
+			fmt.Printf("Sending %s to %s\n", option, remote)
 		}
 	}
 }
 
-// --PUT-- {API_URL}/users/{id}
-func updateUser(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	userID, err := strconv.Atoi(vars["id"])
-	var updatedUser user
-
-	if err != nil {
-		fmt.Fprintf(w, "Id no válido")
+func sendAllTrain(url, local string, remotes []string) {
+	for _, remote := range remotes {
+		sendTrain(local, remote, url)
 	}
+}
 
-	reqBody, err := ioutil.ReadAll(r.Body)
-	if err != nil {
-		fmt.Fprintf(w, "Inserte un usuario valido.")
-	}
-
-	json.Unmarshal(reqBody, &updatedUser)
-
-	for index, user := range users {
-		if user.ID == userID {
-			users = append(users[:index], users[index+1:]...)
-			updatedUser.ID = userID
-			users = append(users, updatedUser)
-			fmt.Fprintf(w, "The task with ID %v has been updated", user.ID)
+func sendTrain(local, remote, url string) {
+	if conn, err := net.Dial("tcp", remote); err == nil {
+		enc := json.NewEncoder(conn)
+		if err := enc.Encode(TrainData{url}); err == nil {
+			fmt.Printf("Sending %s to %s\n", url, remote)
 		}
 	}
 }
 
-// --POST-- {API_URL}/rnn/train
-func trainNeuronalNetwork(w http.ResponseWriter, r *http.Request) {
-	var newTraining training
-
-	reqBody, err := ioutil.ReadAll(r.Body)
-	if err != nil {
-		fmt.Fprintf(w, "Inserte un cuerpo valido.")
+func sendAllPredict(object PredictData, local string, remotes []string) {
+	for _, remote := range remotes {
+		sendPredict(local, remote, object)
 	}
-
-	json.Unmarshal(reqBody, &newTraining)
-
-	// inicialización eel tiempo (para medir cuánto se demora en ejecutarse)
-	start := time.Now()
-
-	// obtenemos el datset de entrenamiento desde el repositorio online
-	url := newTraining.Dataset
-	data, _ := readCSVFromUrl(url)
-	trainingSet := matConvertToFloat64(data)
-
-	network.initializeNetwork()
-
-	// división del dataset en 4 secciones de entrenamiento
-	lengthTrainingSet := len(trainingSet)
-	firstTrainingSection := trainingSet[:lengthTrainingSet/4]
-	secondTrainingSection := trainingSet[lengthTrainingSet/4 : 2*lengthTrainingSet/4]
-	thirdTrainingSection := trainingSet[2*lengthTrainingSet/4 : 3*lengthTrainingSet/4]
-	fourthTrainingSection := trainingSet[3*lengthTrainingSet/4:]
-
-	// inicialización y cierre anticipado del canal por el cual se compartirá información de la propagaciónh hacia adelante
-	chFrontPropagation := make(chan string)
-	defer close(chFrontPropagation)
-
-	// ciclo for por cada época
-	for i := 0; i < network.epochs; i++ {
-		fmt.Printf("Epoch %d \n", i)
-
-		// ejecución paralela de la propagación hacia adelante de cada sección de entrenamiento
-		finishedSets := 0
-		var output1, hidden1, output2, hidden2, output3, hidden3, output4, hidden4 [][]float64
-		go func() { hidden1, output1 = network.frontPropagation(chFrontPropagation, firstTrainingSection, 1) }()
-		go func() { hidden2, output2 = network.frontPropagation(chFrontPropagation, secondTrainingSection, 2) }()
-		go func() { hidden3, output3 = network.frontPropagation(chFrontPropagation, thirdTrainingSection, 3) }()
-		go func() { hidden4, output4 = network.frontPropagation(chFrontPropagation, fourthTrainingSection, 4) }()
-		for {
-			msg := <-chFrontPropagation
-			fmt.Printf("Msg: %s \n", msg)
-			if msg[:10] == "Propagated" {
-				finishedSets += 1
-			}
-			// si todas las secciones se han propagado hacia adelante, se rompe el ciclo
-			if finishedSets == 4 {
-				time.Sleep(360000 * time.Nanosecond)
-				break
-			}
-		}
-		// combinación de los resultados de cada sección de aprendizaje
-		propagatedGeneralOutput := make([][]float64, lengthTrainingSet)
-		propagatedGeneralHidden := make([][]float64, lengthTrainingSet)
-		// -- combinación de la primera sección
-		indexHelper := 0
-		for j := 0; j < len(output1); j++ {
-			propagatedGeneralOutput[j+indexHelper] = output1[j]
-			propagatedGeneralHidden[j+indexHelper] = hidden1[j]
-		}
-		// -- combinación de la segunda sección
-		indexHelper = indexHelper + len(output1)
-		for j := 0; j < len(output2); j++ {
-			propagatedGeneralOutput[j+indexHelper] = output2[j]
-			propagatedGeneralHidden[j+indexHelper] = hidden2[j]
-		}
-		// -- combinación de la tercera sección
-		indexHelper = indexHelper + len(output2)
-		for j := 0; j < len(output3); j++ {
-			propagatedGeneralOutput[j+indexHelper] = output3[j]
-			propagatedGeneralHidden[j+indexHelper] = hidden3[j]
-		}
-		// -- combinación de la cuarta sección
-		indexHelper = indexHelper + len(output3)
-		for j := 0; j < len(output4); j++ {
-			propagatedGeneralOutput[j+indexHelper] = output4[j]
-			propagatedGeneralHidden[j+indexHelper] = hidden4[j]
-		}
-
-		// propagación hacia atrás y aprendizaje de la red neuronal
-		network.backPropagation(propagatedGeneralHidden, propagatedGeneralOutput, trainingSet, i)
-		fmt.Printf("Learned in epoch %d\n\n", i)
-	}
-
-	// cálculo del error general del modelo
-	for i := 0; i < len(network.epochErrors); i++ {
-		network.modelError += network.epochErrors[i] / float64(network.epochs)
-	}
-
-	// cálculo del tiempo transcurrido
-	elapsed := time.Since(start)
-
-	// visualización de métricas
-	fmt.Printf("\n---------------------------\n")
-	fmt.Printf("METRICS")
-	fmt.Printf("\n---------------------------\n")
-	fmt.Printf("Model error: %f\n", network.modelError)
-	fmt.Printf("Execution took %s", elapsed)
-
-	fmt.Fprintf(w, "Model error: %f\n", network.modelError)
 }
 
-// --POST-- {API_URL}/rnn/prediction
-func makePrediction(w http.ResponseWriter, r *http.Request) {
-	var newPrediction prediction
-
-	reqBody, err := ioutil.ReadAll(r.Body)
-	if err != nil {
-		fmt.Fprintf(w, "Inserte un cuerpo valido.")
+func sendPredict(local, remote string, object PredictData) {
+	if conn, err := net.Dial("tcp", remote); err == nil {
+		enc := json.NewEncoder(conn)
+		if err := enc.Encode(object); err == nil {
+			fmt.Printf("Sending %s to %s\n", object, remote)
+		}
 	}
+}
 
-	json.Unmarshal(reqBody, &newPrediction)
+func executeServer(chMsg chan Msg, local string, remotes []string) {
+	go server(local, remotes, chMsg)
+}
 
+func predictHandler(chMsg chan Msg, predictData PredictData, local string, remotes []string) string {
 	predictMatrix := make([][]float64, 1)
 	predictMatrix[0] = make([]float64, network.inputNeuronsAmount)
-	predictMatrix[0][0] = newPrediction.Education
-	predictMatrix[0][1] = newPrediction.Salary
-	predictMatrix[0][2] = newPrediction.Loan
-	predictMatrix[0][3] = newPrediction.History
+	predictMatrix[0][0] = predictData.Education
+	predictMatrix[0][1] = predictData.Salary
+	predictMatrix[0][2] = predictData.Loan
+	predictMatrix[0][3] = predictData.History
+	data := "Riesgo"
+	var riesgo, sin_riesgo int
 
 	predictedValue := network.predict(predictMatrix)
+	if predictedValue == 1 {
+		data = "Seguro"
+	}
+	sendAll(data, local, remotes)
+	if data == "Riesgo" {
+		riesgo = 1
+	} else {
+		sin_riesgo = 1
+	}
+	for range remotes {
+		msg := <-chMsg
+		if msg.Data == "Riesgo" {
+			riesgo++
+		} else {
+			sin_riesgo++
+		}
+	}
+	if riesgo > sin_riesgo {
+		fmt.Println("Tiene riesgo")
+		return "Riesgo"
+	} else {
+		fmt.Println("Es seguro")
+		return "Seguro"
+	}
+}
 
+func trainNeuronalNetwork(w http.ResponseWriter, r *http.Request) {
+	var td TrainData
+	reqBody, err := ioutil.ReadAll(r.Body)
+	if err != nil {
+		fmt.Fprintf(w, "Inserte un cuerpo valido.")
+	}
+	json.Unmarshal(reqBody, &td)
+
+	local := os.Args[1]
+	remotes := os.Args[2:]
+	
+	sendAllTrain(td.Url, local, remotes)
+	trainModel(td.Url)
+	fmt.Fprintf(w, "Model error: %f\n", network.modelError)
+	executeServer(chMsg, local, remotes)
+}
+
+func makePrediction(w http.ResponseWriter, r *http.Request) {
+	var pd PredictData
+	reqBody, err := ioutil.ReadAll(r.Body)
+	if err != nil {
+		fmt.Fprintf(w, "Inserte un cuerpo valido.")
+	}
+	json.Unmarshal(reqBody, &pd)
+
+	local := os.Args[1]
+	remotes := os.Args[2:]
+	sendAllPredict(pd, local, remotes)
+	predictedValue := predictHandler(chMsg, pd,local, remotes)
 	fmt.Fprintf(w, "Prediction result: %f\n", predictedValue)
+	executeServer(chMsg, local, remotes)
 }
 
 func main() {
 	router := mux.NewRouter().StrictSlash(true)
-
-	//USER ROUTES
-	router.HandleFunc("/users", getUsers).Methods("GET")
-	router.HandleFunc("/users", createUser).Methods("POST")
-	router.HandleFunc("/users/{id}", getUser).Methods("GET")
-	router.HandleFunc("/users/{id}", deleteUser).Methods("DELETE")
-	router.HandleFunc("/users/{id}", updateUser).Methods("PUT")
-	//-----------
+	local := os.Args[1]
+	remotes := os.Args[2:]
+	executeServer(chMsg, local, remotes)
 
 	//RED NEURONAL ROUTES
-	router.HandleFunc("/rnn/train", trainNeuronalNetwork).Methods("POST")
-	router.HandleFunc("/rnn/prediction", makePrediction).Methods("POST")
+	router.HandleFunc("/train", trainNeuronalNetwork).Methods("POST")
+	router.HandleFunc("/prediction", makePrediction).Methods("POST")
+	
+	// inicialización de la red neuronal
+	network.initializeNetwork()
 	//-----------
+	
+	var str string
+	port := ":3"
+	for i := 0; i < 3; i++ {
+		str = string(local[len(local)-(3-i)])
+		num, err := strconv.ParseInt(str, 10, 64)
+		if err != nil {
+			fmt.Println("Bad Port")
+		}
+		port += strconv.FormatInt(num, 16)
+	}
+	fmt.Println("API on port", port)
+	log.Fatal(http.ListenAndServe(port, router))
 
-	log.Fatal(http.ListenAndServe(":3000", router))
 }
